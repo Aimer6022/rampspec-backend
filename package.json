@@ -18,9 +18,11 @@
     "generate": "pnpm build && node scripts/generate.mjs",
     "lint": "eslint .",
     "release:manifest": "node scripts/create-release-manifest.mjs",
+    "security:malware-scan": "node scripts/malware-scan.mjs",
     "start:api": "node dist/apps/api/src/index.js",
     "test": "vitest run",
     "test:database": "vitest run packages/platform/src/database/migrations.integration.test.ts",
+    "test:malware-scan": "node --test scripts/malware-scan.test.mjs",
     "typecheck": "tsc --noEmit",
     "verify:generated": "node scripts/verify-generated.mjs",
     "verify:workspace": "node scripts/verify-workspace.mjs"
