@@ -15,6 +15,8 @@ const expected: Readonly<Record<Role, readonly Action[]>> = {
       action !== "emergency.execute" && action !== "organization.delete",
   ),
   maintainer: [
+    "delivery.read",
+    "delivery.replay",
     "evidence.read",
     "organization.read",
     "project.create",
@@ -44,6 +46,7 @@ const expected: Readonly<Record<Role, readonly Action[]>> = {
   ],
   auditor: [
     "audit.read",
+    "delivery.read",
     "evidence.raw",
     "evidence.read",
     "organization.read",
@@ -54,6 +57,7 @@ const expected: Readonly<Record<Role, readonly Action[]>> = {
     "target.read",
   ],
   viewer: [
+    "delivery.read",
     "evidence.read",
     "organization.read",
     "project.read",

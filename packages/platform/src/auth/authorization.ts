@@ -12,6 +12,8 @@ export type Role = (typeof roles)[number];
 
 export const actions = [
   "audit.read",
+  "delivery.read",
+  "delivery.replay",
   "emergency.execute",
   "evidence.raw",
   "evidence.read",
@@ -43,6 +45,7 @@ export const actions = [
 export type Action = (typeof actions)[number];
 
 const readActions: readonly Action[] = [
+  "delivery.read",
   "evidence.read",
   "organization.read",
   "project.read",
@@ -67,6 +70,7 @@ export const rolePermissions: Readonly<Record<Role, ReadonlySet<Action>>> =
     ),
     maintainer: actionSet([
       ...readActions,
+      "delivery.replay",
       "project.create",
       "project.write",
       "run.cancel",

@@ -96,6 +96,12 @@ export const openApiDocument = {
         required: true,
         schema: { $ref: "#/components/schemas/SecretReferenceId" },
       },
+      DeliveryPathId: {
+        in: "path",
+        name: "deliveryId",
+        required: true,
+        schema: { $ref: "#/components/schemas/DeliveryId" },
+      },
     },
     responses: {
       Problem: {
@@ -455,6 +461,58 @@ export const openApiDocument = {
           "rotatedAt",
           "deletedAt",
           "createdAt",
+        ],
+        type: "object",
+      },
+      DeliveryId: {
+        pattern:
+          "^delivery_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+        type: "string",
+      },
+      Delivery: {
+        additionalProperties: false,
+        properties: {
+          attemptLineageId: { type: "string" },
+          createdAt: { $ref: "#/components/schemas/UtcTimestamp" },
+          deadLetterAt: {
+            oneOf: [
+              { $ref: "#/components/schemas/UtcTimestamp" },
+              { type: "null" },
+            ],
+          },
+          id: { $ref: "#/components/schemas/DeliveryId" },
+          kind: { enum: ["export", "webhook"], type: "string" },
+          payloadHash: { pattern: "^[0-9a-f]{64}$", type: "string" },
+          replayedFromId: {
+            oneOf: [
+              { $ref: "#/components/schemas/DeliveryId" },
+              { type: "null" },
+            ],
+          },
+          reportId: {
+            pattern:
+              "^report_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            type: "string",
+          },
+          retryCount: { minimum: 0, type: "integer" },
+          state: {
+            enum: ["pending", "failed", "delivered", "dead-letter"],
+            type: "string",
+          },
+          updatedAt: { $ref: "#/components/schemas/UtcTimestamp" },
+        },
+        required: [
+          "attemptLineageId",
+          "createdAt",
+          "deadLetterAt",
+          "id",
+          "kind",
+          "payloadHash",
+          "replayedFromId",
+          "reportId",
+          "retryCount",
+          "state",
+          "updatedAt",
         ],
         type: "object",
       },
@@ -1490,6 +1548,63 @@ export const openApiDocument = {
         tags: ["Targets"],
       },
     },
+    "/v1/deliveries/dead-letter": {
+      get: {
+        operationId: "listDeadLetterDeliveries",
+        parameters: [...protectedOperationParameters],
+        responses: {
+          "200": jsonResponse("Dead-letter deliveries.", {
+            items: { $ref: "#/components/schemas/Delivery" },
+            type: "array",
+          }),
+          "401": { $ref: "#/components/responses/Problem" },
+          "403": { $ref: "#/components/responses/Problem" },
+        },
+        summary: "List dead-letter deliveries",
+        tags: ["Deliveries"],
+      },
+    },
+    "/v1/deliveries/{deliveryId}": {
+      get: {
+        operationId: "getDelivery",
+        parameters: [
+          ...protectedOperationParameters,
+          { $ref: "#/components/parameters/DeliveryPathId" },
+        ],
+        responses: {
+          "200": jsonResponse("Delivery.", {
+            $ref: "#/components/schemas/Delivery",
+          }),
+          "401": { $ref: "#/components/responses/Problem" },
+          "403": { $ref: "#/components/responses/Problem" },
+          "404": { $ref: "#/components/responses/Problem" },
+        },
+        summary: "Get a delivery",
+        tags: ["Deliveries"],
+      },
+    },
+    "/v1/deliveries/{deliveryId}/replay": {
+      post: {
+        operationId: "replayDeadLetterDelivery",
+        parameters: [
+          ...mutationOperationParameters,
+          { $ref: "#/components/parameters/DeliveryPathId" },
+        ],
+        responses: {
+          "202": jsonResponse(
+            "Replay accepted; the new attempt lineage is pending delivery.",
+            { $ref: "#/components/schemas/Delivery" },
+          ),
+          "400": { $ref: "#/components/responses/Problem" },
+          "401": { $ref: "#/components/responses/Problem" },
+          "403": { $ref: "#/components/responses/Problem" },
+          "404": { $ref: "#/components/responses/Problem" },
+          "409": { $ref: "#/components/responses/Problem" },
+        },
+        summary: "Replay a dead-letter delivery",
+        tags: ["Deliveries"],
+      },
+    },
   },
   security: [{ bearerAuth: [] }],
   servers: [{ url: "https://api.rampspec.dev" }],
@@ -1514,6 +1629,11 @@ export const openApiDocument = {
     {
       description: "A constrained, durable SEP-1 reviewer workflow.",
       name: "Reference runs",
+    },
+    {
+      description:
+        "Dead-letter webhook deliveries and authorized operator replay.",
+      name: "Deliveries",
     },
   ],
 } as const;

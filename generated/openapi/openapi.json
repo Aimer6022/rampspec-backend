@@ -86,6 +86,14 @@
         "schema": {
           "$ref": "#/components/schemas/SecretReferenceId"
         }
+      },
+      "DeliveryPathId": {
+        "in": "path",
+        "name": "deliveryId",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/DeliveryId"
+        }
       }
     },
     "responses": {
@@ -693,6 +701,89 @@
           "rotatedAt",
           "deletedAt",
           "createdAt"
+        ],
+        "type": "object"
+      },
+      "DeliveryId": {
+        "pattern": "^delivery_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+        "type": "string"
+      },
+      "Delivery": {
+        "additionalProperties": false,
+        "properties": {
+          "attemptLineageId": {
+            "type": "string"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/UtcTimestamp"
+          },
+          "deadLetterAt": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UtcTimestamp"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "$ref": "#/components/schemas/DeliveryId"
+          },
+          "kind": {
+            "enum": [
+              "export",
+              "webhook"
+            ],
+            "type": "string"
+          },
+          "payloadHash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "replayedFromId": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DeliveryId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reportId": {
+            "pattern": "^report_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "retryCount": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "failed",
+              "delivered",
+              "dead-letter"
+            ],
+            "type": "string"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/UtcTimestamp"
+          }
+        },
+        "required": [
+          "attemptLineageId",
+          "createdAt",
+          "deadLetterAt",
+          "id",
+          "kind",
+          "payloadHash",
+          "replayedFromId",
+          "reportId",
+          "retryCount",
+          "state",
+          "updatedAt"
         ],
         "type": "object"
       },
@@ -2820,6 +2911,150 @@
           "Targets"
         ]
       }
+    },
+    "/v1/deliveries/dead-letter": {
+      "get": {
+        "operationId": "listDeadLetterDeliveries",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/OrganizationId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Delivery"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Dead-letter deliveries.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Correlates the request across services and audit records.",
+                "schema": {
+                  "$ref": "#/components/schemas/RequestId"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "summary": "List dead-letter deliveries",
+        "tags": [
+          "Deliveries"
+        ]
+      }
+    },
+    "/v1/deliveries/{deliveryId}": {
+      "get": {
+        "operationId": "getDelivery",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/OrganizationId"
+          },
+          {
+            "$ref": "#/components/parameters/DeliveryPathId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Delivery"
+                }
+              }
+            },
+            "description": "Delivery.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Correlates the request across services and audit records.",
+                "schema": {
+                  "$ref": "#/components/schemas/RequestId"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "summary": "Get a delivery",
+        "tags": [
+          "Deliveries"
+        ]
+      }
+    },
+    "/v1/deliveries/{deliveryId}/replay": {
+      "post": {
+        "operationId": "replayDeadLetterDelivery",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/OrganizationId"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/DeliveryPathId"
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Delivery"
+                }
+              }
+            },
+            "description": "Replay accepted; the new attempt lineage is pending delivery.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Correlates the request across services and audit records.",
+                "schema": {
+                  "$ref": "#/components/schemas/RequestId"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "summary": "Replay a dead-letter delivery",
+        "tags": [
+          "Deliveries"
+        ]
+      }
     }
   },
   "security": [
@@ -2852,6 +3087,10 @@
     {
       "description": "A constrained, durable SEP-1 reviewer workflow.",
       "name": "Reference runs"
+    },
+    {
+      "description": "Dead-letter webhook deliveries and authorized operator replay.",
+      "name": "Deliveries"
     }
   ]
 }
