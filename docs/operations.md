@@ -33,3 +33,29 @@ code (`missing-signature`, `malformed-signature`, `missing-delivery-id`,
 `malformed-delivery-id`, `stale-timestamp`, `invalid-signature`,
 `replayed-delivery`); never log request bodies or secrets when investigating
 a rejection.
+
+## Scheduled-run misfire policy
+
+When the scheduler is down, runs whose scheduled time passes are missed. On
+recovery, `ScheduleService.recover` applies the schedule's misfire policy
+deterministically for the recovery instant:
+
+- `skip` (default): missed runs are dropped; the next run is the first
+  occurrence after recovery. No replayed execution is ever created.
+- `run-once`: exactly one execution is due, however many occurrences were
+  missed; the next run is the first occurrence after recovery.
+- `catch-up`: each missed occurrence is due, bounded by the schedule's
+  `maxCatchUp` (1–10, default 10). When more occurrences were missed than
+  the limit, the recovery is flagged `capped: true` and the excess is
+  dropped, never queued. Catch-up therefore cannot create an unreviewed
+  burst of executions after a long outage.
+
+Recovery is idempotent: repeating it at the same instant reports zero
+missed occurrences because the next run already lies in the future.
+Disabled schedules refuse recovery. Every recovery records
+`lastMisfire` on the schedule and returns audit metadata
+(`misfire_policy`, `missed_occurrences`, `executions_due`,
+`misfire_capped`, `schedule_id`) for the audit trail; the durable record
+lives in `rampspec.schedule_misfires` (migration 0010). Changing a
+schedule's misfire policy requires the `schedule.write` action
+(maintainer and above); reading schedule state requires `schedule.read`.
