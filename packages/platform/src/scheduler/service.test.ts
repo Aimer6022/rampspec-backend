@@ -6,11 +6,16 @@ import {
   InMemoryAuditStore,
   verifyMetadataHash,
 } from "../audit/service.js";
+import { InMemoryRunRepository, RunService } from "../runs/service.js";
 import {
   countMissedOccurrences,
   resolveMisfire,
 } from "./recurrence.js";
-import { ScheduleService } from "./service.js";
+import {
+  deriveOccurrenceKey,
+  ScheduleService,
+  ScheduledRunTrigger,
+} from "./service.js";
 
 const clock = () => new Date("2026-09-12T18:00:00.000Z");
 
@@ -26,6 +31,32 @@ function request(role: "auditor" | "maintainer" | "owner" | "viewer", action: "s
     organizationId: "organization_a",
     resourceOrganizationId: "organization_a",
   };
+}
+
+const organizationId = "organization_00000000-0000-4000-8000-000000000001";
+const otherOrganizationId = "organization_00000000-0000-4000-8000-000000000099";
+const projectId = "project_00000000-0000-4000-8000-000000000002";
+const targetId = "target_00000000-0000-4000-8000-000000000003";
+const suiteId = "suite_00000000-0000-4000-8000-000000000004";
+const runInput = {
+  effectiveConfig: { network: "testnet" },
+  organizationId,
+  projectId,
+  suiteId,
+  suiteVersion: "1.0.0",
+  targetId,
+};
+
+function fixedClock(): () => Date {
+  return () => new Date("2026-09-12T18:00:00.000Z");
+}
+
+function triggerSetup() {
+  const schedules = new ScheduleService({ clock: fixedClock() });
+  const runs = new RunService({ repository: new InMemoryRunRepository() });
+  const trigger = new ScheduledRunTrigger({ runs, schedules });
+  schedules.create("nightly_run", 3600);
+  return { runs, schedules, trigger };
 }
 
 describe("recurring schedules", () => { it("creates deterministic enabled schedules and disables them", () => { const service = new ScheduleService({ clock: () => new Date("2026-09-12T18:00:00.000Z") }); const schedule = service.create("nightly_run", 3600); expect(schedule.nextRunAt).toBe("2026-09-12T19:00:00.000Z"); expect(service.disable(schedule.id).enabled).toBe(false); }); it("rejects unsafe intervals", () => { const service = new ScheduleService(); expect(() => service.create("x", 60)).toThrow("schedule"); expect(() => service.create("valid_schedule", 30)).toThrow("schedule"); }); });
@@ -357,5 +388,229 @@ describe("misfire audit integration", () => {
     expect(service.get("nightly_run").lastMisfire?.auditMetadata).toEqual(
       event.metadata,
     );
+  });
+});
+
+describe("occurrence keys", () => {
+  it("derives a stable key for one schedule occurrence", () => {
+    expect(deriveOccurrenceKey("nightly_run", "2026-09-12T19:00:00.000Z")).toBe(
+      "schedule:nightly_run:2026-09-12T19:00:00.000Z",
+    );
+  });
+
+  it("normalizes equivalent timestamps to the same key", () => {
+    const fromString = deriveOccurrenceKey(
+      "nightly_run",
+      "2026-09-12T19:00:00.000Z",
+    );
+    expect(
+      deriveOccurrenceKey("nightly_run", new Date("2026-09-12T19:00:00.000Z")),
+    ).toBe(fromString);
+    expect(
+      deriveOccurrenceKey("nightly_run", "2026-09-12T21:00:00.000+02:00"),
+    ).toBe(fromString);
+  });
+
+  it("separates keys by schedule and by occurrence", () => {
+    const key = deriveOccurrenceKey("nightly_run", "2026-09-12T19:00:00.000Z");
+    expect(
+      deriveOccurrenceKey("weekly_run", "2026-09-12T19:00:00.000Z"),
+    ).not.toBe(key);
+    expect(
+      deriveOccurrenceKey("nightly_run", "2026-09-12T20:00:00.000Z"),
+    ).not.toBe(key);
+  });
+
+  it("stays inside the idempotency-key bounds at both id lengths", () => {
+    const shortKey = deriveOccurrenceKey("abc", "2026-09-12T19:00:00.000Z");
+    const longKey = deriveOccurrenceKey(
+      "a".repeat(64),
+      "2026-09-12T19:00:00.000Z",
+    );
+    for (const key of [shortKey, longKey]) {
+      expect(key.length).toBeGreaterThanOrEqual(16);
+      expect(key.length).toBeLessThanOrEqual(128);
+      expect(key).toMatch(/^[A-Za-z0-9._:-]+$/u);
+    }
+  });
+
+  it("rejects invalid schedule ids and occurrences", () => {
+    expect(() => deriveOccurrenceKey("x", "2026-09-12T19:00:00.000Z")).toThrow(
+      "schedule",
+    );
+    expect(() =>
+      deriveOccurrenceKey("nightly_run", "not-a-date"),
+    ).toThrow("occurrence");
+  });
+});
+
+describe("occurrence claims", () => {
+  it("claims an occurrence once and reports the repeat claim", () => {
+    const service = new ScheduleService({ clock: fixedClock() });
+    service.create("nightly_run", 3600);
+    const first = service.claimOccurrence("nightly_run");
+    expect(first.claimed).toBe(true);
+    expect(first.occurrenceAt).toBe("2026-09-12T19:00:00.000Z");
+    expect(first.occurrenceKey).toBe(
+      "schedule:nightly_run:2026-09-12T19:00:00.000Z",
+    );
+    const second = service.claimOccurrence("nightly_run");
+    expect(second.claimed).toBe(false);
+    expect(second.occurrenceKey).toBe(first.occurrenceKey);
+  });
+
+  it("rejects claims for unknown, disabled, or non-due occurrences", () => {
+    const service = new ScheduleService({ clock: fixedClock() });
+    service.create("nightly_run", 3600);
+    expect(() => service.claimOccurrence("missing_run")).toThrow(
+      "Schedule not found.",
+    );
+    expect(() =>
+      service.claimOccurrence("nightly_run", "2026-09-12T20:00:00.000Z"),
+    ).toThrow("Invalid occurrence.");
+    service.disable("nightly_run");
+    expect(() => service.claimOccurrence("nightly_run")).toThrow(
+      "Schedule is disabled.",
+    );
+  });
+
+  it("advances exactly one interval and ignores a retried advance", () => {
+    const service = new ScheduleService({ clock: fixedClock() });
+    const schedule = service.create("nightly_run", 3600);
+    const advanced = service.advance(
+      schedule.id,
+      "2026-09-12T19:00:00.000Z",
+    );
+    expect(advanced.nextRunAt).toBe("2026-09-12T20:00:00.000Z");
+    expect(
+      service.advance(schedule.id, "2026-09-12T19:00:00.000Z").nextRunAt,
+    ).toBe("2026-09-12T20:00:00.000Z");
+    expect(() =>
+      service.advance(schedule.id, "2026-09-12T21:00:00.000Z"),
+    ).toThrow("Invalid occurrence.");
+  });
+
+  it("lists only due and enabled schedules", () => {
+    const service = new ScheduleService({ clock: fixedClock() });
+    service.create("nightly_run", 3600);
+    const disabled = service.create("disabled_run", 3600);
+    service.disable(disabled.id);
+    expect(service.due()).toEqual([]);
+    expect(
+      service.due(new Date("2026-09-12T19:00:00.000Z")).map(
+        (schedule) => schedule.id,
+      ),
+    ).toEqual(["nightly_run"]);
+  });
+});
+
+describe("scheduled run triggers", () => {
+  it("creates one run per occurrence and advances the schedule once", async () => {
+    const { schedules, trigger } = triggerSetup();
+    const first = await trigger.trigger("nightly_run", runInput);
+    expect(first.created).toBe(true);
+    expect(first.claimed).toBe(true);
+    expect(first.run.idempotencyKey).toBe(
+      "schedule:nightly_run:2026-09-12T19:00:00.000Z",
+    );
+    expect(first.run.state).toBe("requested");
+    expect(first.occurrenceAt).toBe("2026-09-12T19:00:00.000Z");
+    const next = await trigger.trigger("nightly_run", runInput);
+    expect(next.created).toBe(true);
+    expect(next.run.id).not.toBe(first.run.id);
+    expect(next.occurrenceKey).toBe(
+      "schedule:nightly_run:2026-09-12T20:00:00.000Z",
+    );
+    expect(
+      schedules.claimOccurrence("nightly_run").occurrenceAt,
+    ).toBe("2026-09-12T21:00:00.000Z");
+  });
+
+  it("returns the original run for concurrent duplicate triggers", async () => {
+    const { schedules, trigger } = triggerSetup();
+    const [first, second] = await Promise.all([
+      trigger.trigger("nightly_run", runInput),
+      trigger.trigger("nightly_run", runInput),
+    ]);
+    expect(first.run.id).toBe(second.run.id);
+    expect(first.run).toEqual(second.run);
+    expect([first.created, second.created].filter(Boolean)).toHaveLength(1);
+    expect([first.claimed, second.claimed].filter(Boolean)).toHaveLength(1);
+    // The schedule advanced exactly one interval despite the duplicate.
+    expect(
+      schedules.claimOccurrence("nightly_run").occurrenceAt,
+    ).toBe("2026-09-12T20:00:00.000Z");
+  });
+
+  it("keeps the same occurrence separate across organizations", async () => {
+    const repository = new InMemoryRunRepository();
+    const makeTrigger = () => {
+      const schedules = new ScheduleService({ clock: fixedClock() });
+      schedules.create("nightly_run", 3600);
+      return new ScheduledRunTrigger({
+        runs: new RunService({ repository }),
+        schedules,
+      });
+    };
+    const [first, other] = await Promise.all([
+      makeTrigger().trigger("nightly_run", runInput),
+      makeTrigger().trigger("nightly_run", {
+        ...runInput,
+        organizationId: otherOrganizationId,
+      }),
+    ]);
+    expect(first.created).toBe(true);
+    expect(other.created).toBe(true);
+    expect(other.run.id).not.toBe(first.run.id);
+    expect(other.run.idempotencyKey).toBe(first.run.idempotencyKey);
+    expect(other.occurrenceKey).toBe(first.occurrenceKey);
+  });
+
+  it("recovers the original run when a replica fails over mid-occurrence", async () => {
+    const repository = new InMemoryRunRepository();
+    const primarySchedules = new ScheduleService({ clock: fixedClock() });
+    const primaryRuns = new RunService({ repository });
+    primarySchedules.create("nightly_run", 3600);
+    // Primary claims the occurrence and creates the run, then crashes
+    // before advancing the schedule.
+    const claim = primarySchedules.claimOccurrence("nightly_run");
+    const { created, run } = await primaryRuns.createClaim({
+      ...runInput,
+      idempotencyKey: claim.occurrenceKey,
+    });
+    expect(created).toBe(true);
+
+    // Failover replica starts from the same due occurrence.
+    const replicaSchedules = new ScheduleService({ clock: fixedClock() });
+    const replicaRuns = new RunService({ repository });
+    const replicaTrigger = new ScheduledRunTrigger({
+      runs: replicaRuns,
+      schedules: replicaSchedules,
+    });
+    replicaSchedules.create("nightly_run", 3600);
+    const recovered = await replicaTrigger.trigger("nightly_run", runInput);
+    expect(recovered.created).toBe(false);
+    expect(recovered.run).toEqual(run);
+    expect(
+      replicaSchedules.claimOccurrence("nightly_run").occurrenceAt,
+    ).toBe("2026-09-12T20:00:00.000Z");
+  });
+
+  it("creates one run when two failover replicas trigger concurrently", async () => {
+    const repository = new InMemoryRunRepository();
+    const makeReplica = () => {
+      const schedules = new ScheduleService({ clock: fixedClock() });
+      schedules.create("nightly_run", 3600);
+      return new ScheduledRunTrigger({
+        runs: new RunService({ repository }),
+        schedules,
+      });
+    };
+    const [first, second] = await Promise.all([
+      makeReplica().trigger("nightly_run", runInput),
+      makeReplica().trigger("nightly_run", runInput),
+    ]);
+    expect(first.run.id).toBe(second.run.id);
+    expect([first.created, second.created].filter(Boolean)).toHaveLength(1);
   });
 });

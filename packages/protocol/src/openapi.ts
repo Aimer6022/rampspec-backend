@@ -42,7 +42,7 @@ export const openApiDocument = {
       },
       IdempotencyKey: {
         description:
-          "Caller-generated key that identifies one mutation request.",
+          "Caller-generated key that identifies one mutation request. Retrying with the same key returns the original execution instead of creating a duplicate. Scheduled executions use a stable occurrence key of the form schedule:<schedule-id>:<occurrence-timestamp>, so retries and scheduler failover remain idempotent across process boundaries.",
         in: "header",
         name: "Idempotency-Key",
         required: true,

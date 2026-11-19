@@ -59,3 +59,28 @@ Disabled schedules refuse recovery. Every recovery records
 lives in `rampspec.schedule_misfires` (migration 0010). Changing a
 schedule's misfire policy requires the `schedule.write` action
 (maintainer and above); reading schedule state requires `schedule.read`.
+
+## Scheduled executions
+
+Each schedule occurrence runs at most once. The scheduler derives a stable
+occurrence key, `schedule:<schedule-id>:<occurrence-timestamp>` in UTC, and
+uses it as the run idempotency key. The run store claims that key atomically:
+the first claim creates the run and every duplicate claim — a retry, a
+second sweep, or a failover replica — returns the original run reference
+instead of creating another run. The schedule advances past an occurrence
+only after the run claim succeeds, so a scheduler crash before the claim
+leaves the occurrence due and the next sweep retries it idempotently.
+
+In PostgreSQL the cross-process guarantee is `UNIQUE (organization_id,
+idempotency_key)` on `rampspec.runs` (migration 0005); a Postgres run
+repository must map a unique violation back to the existing row. The JSON
+file store used by the reference API serializes claims inside one process
+only — do not run two reference-API processes against the same file and
+expect cross-process deduplication.
+
+When investigating a scheduled run, check the run's idempotency key: two
+runs for one occurrence mean the key was not derived from the occurrence
+(check for clock skew between scheduler replicas or a caller passing a
+fresh key per attempt). A past occurrence with no run means the claim never
+succeeded; re-triggering the same occurrence is safe because the claim
+returns the original run once it exists.
